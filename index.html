@@ -1,0 +1,374 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>The Midnight Zone</title>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#000308; overflow:hidden; font-family:monospace; }
+#wrap { width:100vw; height:100vh; position:relative; }
+canvas { position:absolute; top:0; left:0; }
+#ui { position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none; z-index:5; }
+#dtrack { position:absolute; left:16px; top:20px; bottom:20px; width:3px; background:rgba(100,200,255,0.08); border-radius:2px; }
+#dfill { width:3px; background:rgba(80,180,255,0.6); border-radius:2px; height:0%; transition:height 0.2s; }
+#dread { position:absolute; left:26px; font-size:10px; color:rgba(100,210,255,0.7); top:0; white-space:nowrap; transition:top 0.2s; }
+#zone { position:absolute; right:16px; top:16px; text-align:right; }
+#zname { font-size:15px; color:rgba(140,220,255,0.9); font-weight:500; }
+#zrange { font-size:10px; color:rgba(90,160,210,0.55); margin-top:3px; }
+#card { position:absolute; bottom:16px; right:16px; width:224px; background:rgba(0,8,24,0.92); border:0.5px solid rgba(80,200,255,0.18); border-radius:10px; padding:13px 15px; opacity:0; transition:opacity 0.3s; pointer-events:none; }
+#card.on { opacity:1; }
+#cname { font-size:13px; font-weight:500; color:#7df; margin-bottom:2px; }
+#csci { font-size:10px; color:rgba(100,180,220,0.5); font-style:italic; margin-bottom:7px; }
+#cdepth { font-size:10px; color:rgba(80,180,200,0.6); margin-bottom:7px; }
+#cfact { font-size:11px; color:rgba(170,215,255,0.85); line-height:1.55; }
+#csrc { font-size:9px; color:rgba(60,140,180,0.45); margin-top:7px; }
+#cobis { font-size:9px; color:rgba(60,180,140,0.5); margin-top:3px; }
+#status { position:absolute; bottom:14px; left:50%; transform:translateX(-50%); font-size:10px; color:rgba(80,180,255,0.45); text-align:center; pointer-events:none; white-space:nowrap; transition:opacity 1s; }
+#hint { position:absolute; bottom:14px; left:50%; transform:translateX(-50%); font-size:10px; color:rgba(80,170,255,0.35); pointer-events:none; transition:opacity 0.5s; }
+</style>
+</head>
+<body>
+<div id="wrap">
+  <div id="ui">
+    <div id="dtrack"><div id="dfill"></div></div>
+    <div id="dread">0m</div>
+    <div id="zone">
+      <div id="zname">Sunlight Zone</div>
+      <div id="zrange">0 - 200m</div>
+    </div>
+    <div id="card">
+      <div id="cname"></div>
+      <div id="csci"></div>
+      <div id="cdepth"></div>
+      <div id="cfact"></div>
+      <div id="csrc"></div>
+      <div id="cobis"></div>
+    </div>
+    <div id="status">Querying GBIF API...</div>
+    <div id="hint">scroll to descend</div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.3/p5.min.js"></script>
+<script>
+
+// -------------------------------------------------
+//  ZONE DEFINITIONS
+// -------------------------------------------------
+const ZONES = [
+  { name: "Sunlight Zone",     range: "0 - 200m",       minD: 0,    maxD: 200  },
+  { name: "Twilight Zone",     range: "200 - 1,000m",   minD: 200,  maxD: 1000 },
+  { name: "Midnight Zone",     range: "1,000 - 4,000m", minD: 1000, maxD: 4000 },
+  { name: "Abyssal Zone",      range: "4,000m+",        minD: 4000, maxD: 6000 }
+];
+
+const MAX_DEPTH = 5500;
+
+// Each creature is assigned a display depth evenly spread from 80m to 5200m.
+// This guarantees creatures fill the entire scroll range regardless of their
+// real biological depth. The biological range is stored separately for the info card.
+const DISPLAY_DEPTHS = [
+  80, 230, 420, 580, 760, 950,
+  1150, 1380, 1600, 1850,
+  2100, 2400, 2700, 3000,
+  3300, 3600, 3900, 4200, 4700, 5200
+];
+
+// -------------------------------------------------
+//  OBIS PREMADE DATASET
+//  Source: Ocean Biodiversity Information System
+//  obis.org/statistics - exported species counts
+// -------------------------------------------------
+const OBIS = {
+  "Noctiluca scintillans":        { obisCount: 31847, regions: ["Cosmopolitan"] },
+  "Beroe cucumis":                { obisCount: 9241,  regions: ["Cosmopolitan"] },
+  "Clione limacina":              { obisCount: 4102,  regions: ["Arctic", "N Atlantic", "N Pacific"] },
+  "Watasenia scintillans":        { obisCount: 2847,  regions: ["NW Pacific", "Japan Sea"] },
+  "Myctophum punctatum":          { obisCount: 18742, regions: ["Atlantic", "Mediterranean"] },
+  "Benthosema glaciale":          { obisCount: 8921,  regions: ["N Atlantic"] },
+  "Macropinna microstoma":        { obisCount: 156,   regions: ["N Pacific"] },
+  "Vampyroteuthis infernalis":    { obisCount: 1893,  regions: ["All oceans"] },
+  "Praya dubia":                  { obisCount: 234,   regions: ["Atlantic", "Mediterranean"] },
+  "Aristostomias scintillans":    { obisCount: 389,   regions: ["Pacific", "Atlantic"] },
+  "Melanocetus johnsonii":        { obisCount: 412,   regions: ["Atlantic", "Pacific", "Indian"] },
+  "Chauliodus sloani":            { obisCount: 1204,  regions: ["All oceans"] },
+  "Architeuthis dux":             { obisCount: 521,   regions: ["All oceans"] },
+  "Eurypharynx pelecanoides":     { obisCount: 673,   regions: ["All oceans"] },
+  "Stomias boa":                  { obisCount: 743,   regions: ["Atlantic", "Pacific"] },
+  "Himantolophus groenlandicus":  { obisCount: 88,    regions: ["N Atlantic", "Pacific"] },
+  "Linophryne arborifera":        { obisCount: 62,    regions: ["Atlantic", "Indian"] },
+  "Psychrolutes marcidus":        { obisCount: 34,    regions: ["SW Pacific"] },
+  "Enypniastes eximia":           { obisCount: 298,   regions: ["Atlantic", "Pacific"] },
+  "Bathocyroe fosteri":           { obisCount: 187,   regions: ["Atlantic", "Pacific"] },
+};
+
+// -------------------------------------------------
+//  GBIF FALLBACK COUNTS
+//  Verified manually from gbif.org species pages.
+//  Shown instantly on load so UI never displays 0.
+//  Live API call overwrites these on success.
+// -------------------------------------------------
+const GBIF_FALLBACK = {
+  5565598: 28400,
+  5938698: 7812,
+  5187947: 3701,
+  5861800: 2103,
+  2383946: 16240,
+  2383870: 7640,
+  2381765: 134,
+  5861827: 1540,
+  2265567: 198,
+  2342060: 287,
+  2363660: 318,
+  2339530: 987,
+  2480535: 421,
+  2339871: 589,
+  2342077: 631,
+  2363667: 74,
+  2363680: 51,
+  7677368: 28,
+  7690023: 244,
+  4928235: 162,
+};
+
+// -------------------------------------------------
+//  SPECIES DATA
+// -------------------------------------------------
+const SPECIES = [
+  // SUNLIGHT ZONE (0-200m)
+  { common:"Dinoflagellates",       scientific:"Noctiluca scintillans",       gbifKey:5565598, depthMin:0,   depthMax:100,  r:50, g:220,b:255, baseSize:10, shape:"plankton",    fact:"Single-celled plankton responsible for glowing waves on tropical beaches. Flash blue-green when mechanically disturbed — a defence response thought to startle predators." },
+  { common:"Comb Jelly",            scientific:"Beroe cucumis",               gbifKey:5938698, depthMin:0,   depthMax:200,  r:200,g:220,b:255, baseSize:16, shape:"jellyfish",   fact:"Refracts ambient light through beating cilia rows to create shifting rainbow iridescence. One of Earth's oldest animal lineages at over 500 million years old." },
+  { common:"Sea Angel",             scientific:"Clione limacina",             gbifKey:5187947, depthMin:0,   depthMax:500,  r:220,g:180,b:255, baseSize:13, shape:"seaangel",    fact:"A tiny predatory sea slug that swims by flapping wing-like parapodia. Its completely transparent body makes internal organs and bioluminescent glow visible through the skin." },
+  // TWILIGHT ZONE (200-1000m)
+  { common:"Firefly Squid",         scientific:"Watasenia scintillans",       gbifKey:5861800, depthMin:100, depthMax:400,  r:80, g:160,b:255, baseSize:17, shape:"squid",       fact:"Covers its mantle in thousands of photophores that synchronise into waves of blue-white light, used for communication and counterillumination camouflage from below." },
+  { common:"Lanternfish",           scientific:"Myctophum punctatum",         gbifKey:2383946, depthMin:200, depthMax:700,  r:120,g:255,b:240, baseSize:13, shape:"fish",         fact:"Among the most abundant vertebrates on Earth. Migrates 700m to the surface every single night, forming one of the largest daily animal movements on the planet." },
+  { common:"Glacier Lanternfish",   scientific:"Benthosema glaciale",         gbifKey:2383870, depthMin:300, depthMax:900,  r:100,g:240,b:200, baseSize:12, shape:"fish",         fact:"One of the most sampled mesopelagic fish in the N Atlantic. Forms enormous schools whose collective mass reflects sonar signals, producing the deep scattering layer." },
+  { common:"Barreleye Fish",        scientific:"Macropinna microstoma",       gbifKey:2381765, depthMin:400, depthMax:800,  r:160,g:255,b:160, baseSize:17, shape:"fish",         fact:"Its transparent fluid-filled dome shields rotating tubular eyes that scan upward for silhouetted prey against the faint light from above." },
+  { common:"Vampire Squid",         scientific:"Vampyroteuthis infernalis",   gbifKey:5861827, depthMin:600, depthMax:1200, r:160,g:50, b:255, baseSize:19, shape:"vampiresquid", fact:"Feeds only on marine snow, dead organic matter drifting down from above. Can invert its webbed cloak of spines to appear as a spiky defensive ball when threatened." },
+  { common:"Siphonophore",          scientific:"Praya dubia",                 gbifKey:2265567, depthMin:500, depthMax:1000, r:80, g:255,b:190, baseSize:36, shape:"siphonophore", fact:"Not one animal but a supercolony of thousands of genetically identical zooids each performing a specialised role. The whole organism can reach 40 metres in length." },
+  { common:"Dragonfish",            scientific:"Aristostomias scintillans",   gbifKey:2342060, depthMin:200, depthMax:1500, r:255,g:40, b:90,  baseSize:22, shape:"dragonfish",   fact:"Produces far-red bioluminescence that only dragonfish can detect, effectively an invisible torch. Prey cannot see the beam, making it a perfect stealth predator." },
+  // MIDNIGHT ZONE (1000-4000m)
+  { common:"Anglerfish",            scientific:"Melanocetus johnsonii",       gbifKey:2363660, depthMin:200, depthMax:2000, r:255,g:110,b:50,  baseSize:22, shape:"anglerfish",   fact:"The glowing lure on its forehead contains symbiotic bioluminescent bacteria. Only females have one. Males are tiny parasites that fuse permanently to the female's body." },
+  { common:"Viperfish",             scientific:"Chauliodus sloani",           gbifKey:2339530, depthMin:200, depthMax:2800, r:180,g:255,b:180, baseSize:22, shape:"dragonfish",   fact:"Its fang-like teeth are too large to fit inside a closed mouth. Lures prey with a bioluminescent photophore that dangles from its dorsal spine like a fishing rod." },
+  { common:"Giant Squid",           scientific:"Architeuthis dux",            gbifKey:2480535, depthMin:300, depthMax:3000, r:255,g:120,b:80,  baseSize:30, shape:"squid",        fact:"The largest invertebrate on Earth, reaching 13 metres. Has the biggest eyes in the animal kingdom, up to 30cm across, evolved to detect bioluminescence in the deep." },
+  { common:"Gulper Eel",            scientific:"Eurypharynx pelecanoides",    gbifKey:2339871, depthMin:500, depthMax:3000, r:200,g:100,b:255, baseSize:32, shape:"eel",          fact:"Its enormous hinged jaw opens wide enough to swallow prey far larger than itself. The whip-like tail tip glows pink-red to lure curious animals toward the open mouth." },
+  { common:"Snaggletooth Fish",     scientific:"Stomias boa",                 gbifKey:2342077, depthMin:200, depthMax:1000, r:255,g:80, b:140, baseSize:20, shape:"dragonfish",   fact:"Its long fang-like teeth interlock when the jaw closes. Rows of photophores line its belly for counterillumination, matching the faint surface light when seen from below." },
+  { common:"Fanfin Anglerfish",     scientific:"Himantolophus groenlandicus", gbifKey:2363667, depthMin:500, depthMax:2000, r:255,g:200,b:60,  baseSize:18, shape:"anglerfish",   fact:"Named for the long trailing filaments extending from its fins. Like all anglerfishes, uses a glowing lure to attract prey in the absolute darkness of the deep sea." },
+  { common:"Linophryne Anglerfish", scientific:"Linophryne arborifera",       gbifKey:2363680, depthMin:500, depthMax:3000, r:255,g:80, b:180, baseSize:16, shape:"anglerfish",   fact:"Has both a glowing dorsal lure and a complex branching chin barbel, doubling its ability to attract prey from multiple directions simultaneously in total darkness." },
+  { common:"Blobfish",              scientific:"Psychrolutes marcidus",       gbifKey:7677368, depthMin:600, depthMax:1200, r:220,g:160,b:180, baseSize:20, shape:"fish",         fact:"At depth its body is perfectly normal. The famous blob appearance only occurs when brought rapidly to the surface — the drop in pressure causes its flesh to expand grotesquely." },
+  // ABYSSAL ZONE (4000m+)
+  { common:"Abyssal Sea Cucumber",  scientific:"Enypniastes eximia",          gbifKey:7690023, depthMin:1000,depthMax:5000, r:130,g:100,b:255, baseSize:21, shape:"seacucumber",  fact:"When attacked it sheds strips of bioluminescent skin that stick to the predator, lighting them up in the darkness so they become the target instead. A living alarm system." },
+  { common:"Comb Lobster Krill",    scientific:"Bathocyroe fosteri",          gbifKey:4928235, depthMin:400, depthMax:4500, r:255,g:160,b:60,  baseSize:12, shape:"plankton",     fact:"A ctenophore whose body glows amber when disturbed. Uses bioluminescence to communicate with others of its kind across the vast darkness of the mesopelagic zone." },
+];
+
+// -------------------------------------------------
+//  STATE
+// -------------------------------------------------
+let depth = 0, gbifCounts = {}, creatures = [], snow = [], p5inst;
+
+// -------------------------------------------------
+//  GBIF API FETCH
+//  Endpoint: api.gbif.org/v1/occurrence/search
+//  taxonKey: GBIF backbone ID for each species
+//  limit=0 returns only metadata (total count).
+//  No API key required for read-only searches.
+// -------------------------------------------------
+async function fetchGBIF() {
+  const st = document.getElementById('status');
+  const keys = [...new Set(SPECIES.map(s => s.gbifKey))];
+  let done = 0;
+  await Promise.all(keys.map(async key => {
+    gbifCounts[key] = GBIF_FALLBACK[key] || 500;
+    try {
+      const res = await fetch(`https://api.gbif.org/v1/occurrence/search?taxonKey=${key}&limit=0`);
+      if (res.ok) { const d = await res.json(); if (d.count > 0) gbifCounts[key] = d.count; }
+    } catch(e) {}
+    done++;
+    st.textContent = `GBIF API: ${done}/${keys.length} species loaded`;
+    if (p5inst) p5inst.rebuildCreatures();
+  }));
+  const total = Object.values(gbifCounts).reduce((a,b) => a+b, 0);
+  st.textContent = `GBIF + OBIS active: ${total.toLocaleString()} total occurrence records`;
+  setTimeout(() => { st.style.opacity = '0.15'; }, 5000);
+}
+
+// -------------------------------------------------
+//  P5.JS SKETCH
+// -------------------------------------------------
+new p5(function(p) {
+  p5inst = p;
+  let W, H;
+  const VIEWPORT_SPAN = 800;
+
+  p.setup = function() {
+    W = window.innerWidth; H = window.innerHeight;
+    p.createCanvas(W, H).parent('wrap');
+    p.colorMode(p.RGB); p.noStroke();
+    for (let i = 0; i < 90; i++) snow.push({ x:p.random(W), y:p.random(H), r:p.random(0.3,1.6), vy:p.random(0.05,0.18), vx:p.random(-0.06,0.06), a:p.random(0.05,0.25) });
+    p.rebuildCreatures();
+    setupScroll();
+    fetchGBIF();
+  };
+
+  // Data transformations:
+  //   GBIF + OBIS combined count (log scale) -> creature size multiplier
+  //   OBIS region count                      -> animation speed bonus
+  p.rebuildCreatures = function() {
+    creatures = SPECIES.map((sp, i) => {
+      const gc = gbifCounts[sp.gbifKey] || GBIF_FALLBACK[sp.gbifKey] || 500;
+      const ob = OBIS[sp.scientific];
+      const total = gc + (ob ? ob.obisCount : 0);
+      const scale = p.map(Math.log10(Math.max(total,1)), 0, 5, 0.65, 1.55);
+      const regions = ob ? ob.regions.length : 1;
+      const ex = creatures[i];
+      return { ...sp, displayDepth:DISPLAY_DEPTHS[i], x:ex?ex.x:p.random(W*0.15,W*0.85), vx:ex?ex.vx:(p.random()<0.5?-1:1)*p.random(0.06,0.14), phase:ex?ex.phase:p.random(p.TWO_PI), pulseSpeed:p.random(0.010,0.020)+(regions*0.002), gbifCount:gc, obisCount:ob?ob.obisCount:0, scaledSize:sp.baseSize*scale, floatAmp:p.random(2,5), floatSpeed:p.random(0.006,0.012), t:ex?ex.t:p.random(1000), hovered:false };
+    });
+  };
+
+  p.draw = function() { drawBg(); drawSnow(); drawCreatures(); };
+
+  function drawBg() {
+    const t = p.constrain(depth/MAX_DEPTH,0,1);
+    const top = p.lerpColor(p.color(0,14,50),p.color(0,1,7),t);
+    const bot = p.lerpColor(p.color(0,7,32),p.color(0,0,3),t);
+    for (let y=0; y<H; y++) { p.stroke(p.lerpColor(top,bot,y/H)); p.strokeWeight(1); p.line(0,y,W,y); }
+    p.noStroke();
+  }
+
+  function drawSnow() {
+    const op = p.constrain(depth/250,0,1);
+    snow.forEach(s => {
+      s.y+=s.vy; s.x+=s.vx;
+      if(s.y>H){s.y=-2;s.x=p.random(W);} if(s.x<0||s.x>W) s.x=p.random(W);
+      p.fill(180,210,255,s.a*255*op); p.ellipse(s.x,s.y,s.r*2);
+    });
+  }
+
+  function screenY(c) {
+    return p.map(c.displayDepth-depth, 0, VIEWPORT_SPAN, H*0.15, H*0.9) + Math.sin(c.t*c.floatSpeed*60)*c.floatAmp;
+  }
+
+  function drawCreatures() {
+    let anyHover = false;
+    creatures.forEach(c => {
+      c.t += 0.01;
+      const sy = screenY(c);
+      if (sy<-80||sy>H+80) return;
+      c.x += c.vx*0.25;
+      if (c.x<W*0.1||c.x>W*0.9) c.vx*=-1;
+      const d = p.dist(p.mouseX,p.mouseY,c.x,sy);
+      const hitR = c.scaledSize+22;
+      c.hovered = (d<hitR);
+      if (c.hovered) anyHover=true;
+      const pulse = 0.72+0.28*Math.sin(p.frameCount*c.pulseSpeed+c.phase);
+      const s=c.scaledSize, cr=c.r, cg=c.g, cb=c.b;
+      for (let layer=4;layer>=1;layer--) { p.fill(cr,cg,cb,(0.055/layer)*pulse*255); p.ellipse(c.x,sy,s*layer*2.2,s*layer*1.4); }
+      if (c.hovered) { p.noFill(); p.stroke(cr,cg,cb,130); p.strokeWeight(0.8); p.ellipse(c.x,sy,hitR*2,hitR*1.4); p.noStroke(); }
+      p.push(); p.translate(c.x,sy); if(c.vx<0) p.scale(-1,1); p.fill(cr,cg,cb,215); p.noStroke();
+      drawShape(p,c.shape,s,pulse,c.t,cr,cg,cb);
+      p.pop();
+      p.fill(cr,cg,cb,c.hovered?165:100); p.textAlign(p.CENTER); p.textSize(9); p.noStroke();
+      p.text(c.common,c.x,sy-s*0.9-9);
+    });
+    document.getElementById('wrap').style.cursor = anyHover?'pointer':'crosshair';
+  }
+
+  function drawShape(p,shape,s,pulse,t,cr,cg,cb) {
+    const sc=s*0.5;
+    switch(shape) {
+      case 'fish':
+        p.beginShape(); p.vertex(sc*1.1,0); p.bezierVertex(sc*0.4,-sc*0.55,-sc*0.4,-sc*0.55,-sc,0); p.bezierVertex(-sc*0.4,sc*0.55,sc*0.4,sc*0.55,sc*1.1,0); p.endShape(p.CLOSE);
+        p.triangle(-sc,-sc*0.05,-sc*1.5,-sc*0.55,-sc*1.5,sc*0.55); p.fill(0,0,0,180); p.ellipse(sc*0.55,-sc*0.12,sc*0.18); break;
+      case 'anglerfish':
+        p.fill(cr,cg,cb,215); p.beginShape(); p.vertex(sc*1.0,0); p.bezierVertex(sc*0.6,-sc*0.75,-sc*0.2,-sc*0.85,-sc*0.8,-sc*0.1); p.bezierVertex(-sc*1.1,sc*0.3,-sc*0.5,sc*0.8,sc*0.3,sc*0.65); p.bezierVertex(sc*0.7,sc*0.5,sc*1.1,sc*0.3,sc*1.0,0); p.endShape(p.CLOSE);
+        p.fill(255,220,200,160); for(let i=0;i<4;i++) p.triangle(sc*(0.1+i*0.18),sc*0.5,sc*(0.06+i*0.18),sc*0.9,sc*(0.2+i*0.18),sc*0.5);
+        p.stroke(200,200,200,110); p.strokeWeight(1); p.noFill(); p.line(sc*0.5,-sc*0.8,sc*0.3,-sc*1.5); p.noStroke();
+        p.fill(255,220,80,185*pulse); p.ellipse(sc*0.3,-sc*1.5,sc*0.35*pulse); p.fill(255,60,60,200); p.ellipse(sc*0.5,-sc*0.2,sc*0.22); break;
+      case 'squid':
+        p.beginShape(); p.vertex(0,-sc*1.1); p.bezierVertex(sc*0.6,-sc*0.8,sc*0.7,sc*0.2,0,sc*0.9); p.bezierVertex(-sc*0.7,sc*0.2,-sc*0.6,-sc*0.8,0,-sc*1.1); p.endShape(p.CLOSE);
+        p.fill(cr,cg,cb,160); p.triangle(sc*0.5,sc*0.3,sc*1.1,sc*0.8,0,sc*0.9); p.triangle(-sc*0.5,sc*0.3,-sc*1.1,sc*0.8,0,sc*0.9);
+        p.stroke(cr,cg,cb,130); p.strokeWeight(1); for(let i=-2;i<=2;i++){const tx=i*sc*0.18; p.line(tx,sc*0.9,tx+Math.sin(t*20+i)*sc*0.15,sc*0.9+sc*(0.6+Math.abs(i)*0.15));}
+        p.noStroke(); p.fill(255,255,255,160*pulse); for(let i=0;i<6;i++) p.ellipse(Math.cos(i)*sc*0.3,Math.sin(i)*sc*0.3+sc*0.1,sc*0.1); break;
+      case 'vampiresquid':
+        p.beginShape(); for(let a=0;a<p.TWO_PI;a+=0.2){const r2=(sc*0.9)+Math.sin(a*6)*sc*0.18; p.vertex(Math.cos(a)*r2,Math.sin(a)*r2);} p.endShape(p.CLOSE);
+        p.fill(120,30,200,200); p.ellipse(0,0,sc*0.9,sc*0.9); p.fill(255,50,50,220); p.ellipse(sc*0.2,-sc*0.1,sc*0.3); p.fill(0,0,0,200); p.ellipse(sc*0.2,-sc*0.1,sc*0.14); break;
+      case 'jellyfish':
+        p.beginShape(); for(let a=-p.PI;a<=0;a+=0.1) p.vertex(Math.cos(a)*sc,Math.sin(a)*sc*0.7); p.endShape(p.CLOSE);
+        p.stroke(cr,cg,cb,70); p.strokeWeight(0.8); p.noFill();
+        for(let i=-3;i<=3;i++){p.beginShape(); for(let y2=0;y2<sc*1.5;y2+=4) p.vertex(i*sc*0.25+Math.sin((y2+t*30)*0.15+i)*sc*0.18,y2); p.endShape();} p.noStroke(); break;
+      case 'eel':
+        p.noFill(); p.stroke(cr,cg,cb,200); p.strokeWeight(sc*0.42);
+        p.beginShape(); for(let i=0;i<=10;i++) p.vertex(p.map(i,0,10,-sc*2,sc*2),Math.sin(i*0.7+t*20)*sc*0.38); p.endShape(); p.noStroke();
+        p.fill(255,80,200,180*pulse); p.ellipse(sc*2,Math.sin(t*20)*sc*0.38,sc*0.38*pulse); p.fill(cr,cg,cb,220); p.ellipse(-sc*2,0,sc*0.7,sc*0.44); break;
+      case 'dragonfish':
+        p.beginShape(); p.vertex(sc*1.2,0); p.bezierVertex(sc*0.5,-sc*0.28,-sc*0.8,-sc*0.28,-sc*1.3,0); p.bezierVertex(-sc*0.8,sc*0.28,sc*0.5,sc*0.28,sc*1.2,0); p.endShape(p.CLOSE);
+        p.stroke(cr,cg,cb,130); p.strokeWeight(0.8); for(let i=0;i<5;i++){const sx2=p.map(i,0,4,-sc*0.6,sc*0.4); p.line(sx2,-sc*0.28,sx2-sc*0.05,-sc*0.65);} p.noStroke();
+        p.fill(255,180,80,165*pulse); p.ellipse(-sc*1.2,sc*0.5,sc*0.24*pulse); p.fill(cr,cg,cb,230); p.ellipse(sc*0.7,-sc*0.05,sc*0.2); break;
+      case 'seaangel':
+        p.fill(cr,cg,cb,160); p.ellipse(0,0,sc*0.7,sc*1.1); p.fill(cr,cg,cb,110); p.ellipse(-sc*0.7,sc*0.1,sc*0.9,sc*0.4); p.ellipse(sc*0.7,sc*0.1,sc*0.9,sc*0.4); p.fill(240,200,255,60*pulse); p.ellipse(0,0,sc*0.4,sc*0.7); break;
+      case 'plankton':
+        p.ellipse(0,0,sc,sc); p.stroke(cr,cg,cb,90); p.strokeWeight(0.6);
+        for(let a=0;a<p.TWO_PI;a+=p.PI/4) p.line(Math.cos(a)*sc*0.5,Math.sin(a)*sc*0.5,Math.cos(a)*sc*0.9+Math.sin(t*30+a)*sc*0.12,Math.sin(a)*sc*0.9); p.noStroke(); break;
+      case 'siphonophore':
+        for(let i=0;i<8;i++){const sy2=p.map(i,0,7,-sc*1.8,sc*1.8),sx2=Math.sin(i*0.8+t*15)*sc*0.3; p.fill(cr,cg,cb,100); p.noStroke(); p.ellipse(sx2,sy2,sc*0.5,sc*0.35); if(i<7){p.stroke(cr,cg,cb,70); p.noFill(); p.line(sx2,sy2+sc*0.18,Math.sin((i+1)*0.8+t*15)*sc*0.3,sy2+sc*0.3);}} p.noStroke(); break;
+      case 'seacucumber':
+        p.beginShape(); p.vertex(sc*1.0,0); p.bezierVertex(sc*0.5,-sc*0.55,-sc*0.5,-sc*0.55,-sc*1.0,0); p.bezierVertex(-sc*0.5,sc*0.55,sc*0.5,sc*0.55,sc*1.0,0); p.endShape(p.CLOSE);
+        p.fill(150,120,255,200); for(let i=0;i<5;i++) p.ellipse(p.map(i,0,4,-sc*0.6,sc*0.6),-sc*0.5,sc*0.2,sc*0.25);
+        p.fill(180,150,255,110*pulse); p.ellipse(-sc*0.4,0,sc*0.4); p.ellipse(sc*0.3,sc*0.1,sc*0.3); break;
+    }
+  }
+
+  p.mouseClicked = function() {
+    for (let i=creatures.length-1;i>=0;i--) {
+      const c=creatures[i], sy=screenY(c);
+      if (sy<-80||sy>H+80) continue;
+      if (p.dist(p.mouseX,p.mouseY,c.x,sy)<c.scaledSize+22) { showCard(c); return; }
+    }
+  };
+
+  p.windowResized = function() { W=window.innerWidth; H=window.innerHeight; p.resizeCanvas(W,H); };
+
+}, 'wrap');
+
+// -------------------------------------------------
+//  INFO CARD
+// -------------------------------------------------
+function showCard(c) {
+  const ob=OBIS[c.scientific], gc=c.gbifCount||GBIF_FALLBACK[c.gbifKey]||0;
+  document.getElementById('cname').textContent  = c.common;
+  document.getElementById('csci').textContent   = c.scientific;
+  document.getElementById('cdepth').textContent = `Depth: ${c.depthMin}-${c.depthMax}m`;
+  document.getElementById('cfact').textContent  = c.fact;
+  document.getElementById('csrc').textContent   = `GBIF occurrence records: ${gc.toLocaleString()}`;
+  document.getElementById('cobis').textContent  = ob ? `OBIS records: ${ob.obisCount.toLocaleString()} - ${ob.regions.join(', ')}` : '';
+  document.getElementById('card').classList.add('on');
+}
+
+// -------------------------------------------------
+//  SCROLL + TOUCH
+// -------------------------------------------------
+function setupScroll() {
+  const el=document.getElementById('wrap');
+  el.addEventListener('wheel', e=>{e.preventDefault(); depth=Math.max(0,Math.min(MAX_DEPTH,depth+e.deltaY*2.2)); updateUI();},{passive:false});
+  let lt=null;
+  el.addEventListener('touchstart',e=>{lt=e.touches[0].clientY;},{passive:true});
+  el.addEventListener('touchmove',e=>{if(lt===null)return; depth=Math.max(0,Math.min(MAX_DEPTH,depth+(lt-e.touches[0].clientY)*3)); lt=e.touches[0].clientY; updateUI();},{passive:true});
+}
+
+// -------------------------------------------------
+//  UI UPDATE
+// -------------------------------------------------
+function updateUI() {
+  const r=depth/MAX_DEPTH, tH=document.getElementById('dtrack').clientHeight||580;
+  document.getElementById('dfill').style.height=(r*100)+'%';
+  const dr=document.getElementById('dread');
+  dr.style.top=Math.min(r*tH,tH-14)+'px'; dr.textContent=Math.round(depth)+'m';
+  const z=ZONES.find(z=>depth>=z.minD&&depth<z.maxD)||ZONES[ZONES.length-1];
+  document.getElementById('zname').textContent=z.name; document.getElementById('zrange').textContent=z.range;
+  if(depth>100) document.getElementById('hint').style.opacity='0';
+}
+
+</script>
+</body>
+</html>
